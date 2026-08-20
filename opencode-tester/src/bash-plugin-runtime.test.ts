@@ -154,6 +154,36 @@ describe("BashApprovePlugin", () => {
     expect(replies).toHaveLength(0)
   })
 
+  test("preserves noop decisions without replying", async () => {
+    const replies: Array<{ sessionID: string; requestID: string; reply: string }> = []
+    const plugin = await BashApprovePlugin({
+      directory: "/repo",
+      client: createClient(replies),
+      serverUrl: new URL("http://127.0.0.1:4096"),
+      $: createShell(fakeProc('{"decision":"noop"}'), []) as never,
+    } as never)
+
+    await plugin["tool.execute.before"]?.(
+      { tool: "bash", sessionID: "session-1", callID: "call-1" },
+      { args: { command: "git status", workdir: "/repo" } },
+    )
+
+    await plugin.event?.({
+      event: {
+        type: "permission.asked",
+        properties: {
+          id: "perm-1",
+          sessionID: "session-1",
+          permission: "bash",
+          patterns: ["git *"],
+          tool: { callID: "call-1" },
+        },
+      },
+    } as never)
+
+    expect(replies).toHaveLength(0)
+  })
+
   test("ignores non-bash permission events", async () => {
     const shellCalls: Array<{ cwd: string }> = []
     const replies: Array<{ sessionID: string; requestID: string; reply: string }> = []

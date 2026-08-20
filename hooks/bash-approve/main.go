@@ -15,6 +15,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -121,7 +122,7 @@ type Config struct {
 func loadConfig() (Config, error) {
 	exe, err := os.Executable()
 	if err != nil {
-		return Config{Enabled: []string{"all"}}, nil
+		return Config{}, fmt.Errorf("cannot locate executable for config: %w", err)
 	}
 	return loadConfigFromPath(filepath.Join(filepath.Dir(exe), "categories.yaml"))
 }
@@ -137,15 +138,7 @@ func loadConfigFromPath(path string) (Config, error) {
 		}
 		return Config{}, fmt.Errorf("cannot read config %s: %w", path, err)
 	}
-	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return Config{}, fmt.Errorf("cannot parse config %s: %w", path, err)
-	}
-	// If enabled is not set, default to all enabled.
-	if cfg.Enabled == nil {
-		cfg.Enabled = []string{"all"}
-	}
-	return cfg, nil
+	return parseConfig(path, data)
 }
 
 func loadExplicitConfigFromPath(path string) (Config, error) {
@@ -153,9 +146,27 @@ func loadExplicitConfigFromPath(path string) (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("cannot read config %s", path)
 	}
+	return parseConfig(path, data)
+}
+
+func parseConfig(path string, data []byte) (Config, error) {
 	var cfg Config
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		return Config{}, fmt.Errorf("cannot parse config %s: %w", path, err)
+	if len(bytes.TrimSpace(data)) != 0 {
+		decoder := yaml.NewDecoder(bytes.NewReader(data))
+		decoder.KnownFields(true)
+		firstErr := decoder.Decode(&cfg)
+		if firstErr != nil && !errors.Is(firstErr, io.EOF) {
+			return Config{}, fmt.Errorf("cannot parse config %s: %w", path, firstErr)
+		}
+		if firstErr == nil {
+			var extra any
+			if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+				if err == nil {
+					return Config{}, fmt.Errorf("cannot parse config %s: multiple YAML documents are not allowed", path)
+				}
+				return Config{}, fmt.Errorf("cannot parse config %s: %w", path, err)
+			}
+		}
 	}
 	if cfg.Enabled == nil {
 		cfg.Enabled = []string{"all"}
@@ -226,6 +237,22 @@ func buildPiErrorOutput(code, message string) PiOutput {
 			Message: message,
 		},
 	}
+}
+
+func decodeStrictJSON(data []byte, dst any) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(dst); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return fmt.Errorf("unexpected trailing JSON value")
+		}
+		return err
+	}
+	return nil
 }
 
 // argsText flattens CallExpr args to a string for regex matching. Each word is
@@ -2176,8 +2203,11 @@ const (
 )
 
 type cliOptions struct {
-	mode       cliMode
-	configPath string
+	mode            cliMode
+	configPath      string
+	noTelemetry     bool
+	showVersion     bool
+	showVersionJSON bool
 }
 
 func telemetryAgentForMode(mode cliMode) string {
@@ -2201,10 +2231,16 @@ func parseCLIOptions(args []string) (cliOptions, error) {
 	var openCodeMode bool
 	var codexMode bool
 	var configPath string
+	var noTelemetry bool
+	var showVersion bool
+	var showVersionJSON bool
 	fs.BoolVar(&piMode, "pi", false, "emit pi runtime JSON output")
 	fs.BoolVar(&openCodeMode, "opencode", false, "emit OpenCode JSON output")
 	fs.BoolVar(&codexMode, "codex", false, "emit Codex JSON output")
 	fs.StringVar(&configPath, "config", "", "path to categories config")
+	fs.BoolVar(&noTelemetry, "no-telemetry", false, "disable telemetry and all state-file access")
+	fs.BoolVar(&showVersion, "version", false, "print build and protocol identity")
+	fs.BoolVar(&showVersionJSON, "version-json", false, "print build and protocol identity as JSON")
 
 	if err := fs.Parse(args); err != nil {
 		return cliOptions{}, err
@@ -2227,21 +2263,50 @@ func parseCLIOptions(args []string) (cliOptions, error) {
 	if selectedModes > 1 {
 		return cliOptions{}, fmt.Errorf("cannot combine multiple output modes")
 	}
-	return cliOptions{mode: mode, configPath: configPath}, nil
+	if showVersion && showVersionJSON {
+		return cliOptions{}, fmt.Errorf("cannot combine --version and --version-json")
+	}
+	return cliOptions{
+		mode:            mode,
+		configPath:      configPath,
+		noTelemetry:     noTelemetry,
+		showVersion:     showVersion,
+		showVersionJSON: showVersionJSON,
+	}, nil
 }
 
 func main() {
-	rawInput, err := io.ReadAll(os.Stdin)
-	if err != nil {
-		os.Exit(0)
-	}
-
 	opts, err := parseCLIOptions(os.Args[1:])
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", binaryName, err)
+		os.Exit(2)
+	}
+	if opts.showVersion {
+		fmt.Println(humanVersion())
+		return
+	}
+	if opts.showVersionJSON {
+		encoded, marshalErr := machineVersion()
+		if marshalErr != nil {
+			fmt.Fprintf(os.Stderr, "%s: cannot encode version: %v\n", binaryName, marshalErr)
+			os.Exit(1)
+		}
+		fmt.Println(string(encoded))
+		return
+	}
+
+	rawInput, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		if opts.mode == modeOpenCode {
+			emitOpenCodeOutput(OpenCodeOutput{Decision: decisionDeny, Reason: "cannot read OpenCode input", Error: "invalid-input"})
+		}
 		os.Exit(0)
 	}
 
-	db := openTelemetryDB()
+	var db *sql.DB
+	if !opts.noTelemetry {
+		db = openTelemetryDB()
+	}
 	if db != nil {
 		defer db.Close() //nolint:errcheck // best-effort telemetry
 	}
@@ -2261,7 +2326,7 @@ func main() {
 			emitPiOutput(buildPiErrorOutput("config-error", err.Error()))
 		}
 		if opts.mode == modeOpenCode {
-			emitOpenCodeOutput(OpenCodeOutput{Decision: decisionDeny, Reason: err.Error()})
+			emitOpenCodeOutput(OpenCodeOutput{Decision: decisionDeny, Reason: err.Error(), Error: "config-error"})
 		}
 		if opts.mode == modeCodex {
 			emitCodexOutput(buildCodexOutput(&result{decision: decisionDeny, denyReason: err.Error()}))
@@ -2292,9 +2357,14 @@ func main() {
 
 	if opts.mode == modeOpenCode {
 		var data OpenCodeInput
-		if err := json.Unmarshal(rawInput, &data); err != nil {
-			logDecision(db, agent, payload, "", "noop", "")
-			emitOpenCodeOutput(OpenCodeOutput{Decision: "noop"})
+		if err := decodeStrictJSON(rawInput, &data); err != nil {
+			reason := "invalid OpenCode input: " + err.Error()
+			logDecision(db, agent, payload, "", decisionDeny, reason)
+			emitOpenCodeOutput(OpenCodeOutput{Decision: decisionDeny, Reason: reason, Error: "invalid-input"})
+		}
+		if err := validateOpenCodeInput(data); err != nil {
+			logDecision(db, agent, payload, data.Command, decisionDeny, err.Error())
+			emitOpenCodeOutput(OpenCodeOutput{Decision: decisionDeny, Reason: err.Error(), Error: "invalid-input"})
 		}
 
 		cmd, r := evaluateOpenCodeToolUse(data, cfg)

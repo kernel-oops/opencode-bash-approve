@@ -2,6 +2,11 @@
 
 A command approval runtime for Claude Code and OpenCode. It auto-approves safe Bash commands, repo-scoped `Read`/`Grep` calls for Claude Code, and blocks dangerous operations. Written in Go for fast startup.
 
+This branch is the maintained OpenCode-oriented port. It is based on upstream
+commit `a81006c2950d23c3d2c81e1faecd695865728d53`; see
+[`PROVENANCE.md`](PROVENANCE.md), [`NOTICE`](NOTICE) and the unchanged MIT
+[`LICENSE`](LICENSE).
+
 A reusable pi package is also included under `packages/pi-bash-approve/` for protecting pi `bash`, `read`, `grep`, `find`, and `ls` tool calls via the same Go runtime.
 
 ## Install
@@ -33,9 +38,49 @@ python3 install.py uninstall --target all
 Installer requirements:
 
 - Python 3.11+
-- Go 1.25+
+- the exact Go version in `hooks/bash-approve/go.mod` (currently Go 1.26.3)
 
 Shared runtime installs to `$XDG_DATA_HOME/claude-bash-approve` when `XDG_DATA_HOME` is an absolute path, else `~/.local/share/claude-bash-approve`.
+
+### Production OpenCode deployment
+
+Use the Linux x86-64 archive produced by the **Linux x86-64 artefact** GitHub
+Actions workflow. The archive contains the prebuilt `approve-bash` executable,
+`categories.yaml`, a per-file `SHA256SUMS`, exact `BUILD-INFO.json`, and
+`LICENSE`/`NOTICE`/`PROVENANCE.md`. The adjacent `.tar.gz.sha256` covers the
+archive itself.
+
+Production integration should execute the binary directly, with a bounded
+timeout and a controlled environment supplied by OpenCode. Pass an explicit
+absolute configuration path and disable state access explicitly:
+
+```text
+/absolute/path/approve-bash --opencode --config /absolute/path/categories.yaml --no-telemetry
+```
+
+The process reads exactly one JSON object from stdin and writes exactly one
+decision object to stdout. Decisions are `allow`, `deny`, `ask`, or `noop`.
+Malformed input and configuration failures return an explicit `deny`; `noop`
+is reserved for valid inputs on which the runtime has no decision. The legacy
+adapter remains available, but production OpenCode integration does not need
+it.
+
+The runtime never downloads dependencies or compiles itself. Legacy shim
+scripts only execute an already-installed binary and fail back to the host's
+manual approval path if it is absent. `install.py` is a source installer and
+therefore builds once during installation; it is not the production artefact
+path.
+
+Build and protocol identity can be inspected without stdin:
+
+```bash
+approve-bash --version
+approve-bash --version-json
+```
+
+`--version-json` is the backwards-compatible machine-readable identity
+endpoint. Existing decision objects are unchanged except that explicit input
+or configuration failures may include an `error` code.
 
 ### Claude Code
 
@@ -143,7 +188,8 @@ git clone https://github.com/mariusvniekerk/claude-bash-approve.git
 }
 ```
 
-3. Copy runtime hook bundle into shared data dir:
+3. Build and copy the runtime hook bundle into the shared data dir (or extract
+   the prebuilt CI artefact instead):
 
 ```bash
 runtime_root="${XDG_DATA_HOME:-$HOME/.local/share}/claude-bash-approve"
@@ -152,10 +198,12 @@ cp hooks/bash-approve/*.go "$runtime_root"/
 cp hooks/bash-approve/go.mod hooks/bash-approve/go.sum "$runtime_root"/
 cp .claude-plugin/plugin.json "$runtime_root"/plugin.json
 cp hooks/bash-approve/categories.yaml hooks/bash-approve/run-hook.sh "$runtime_root"/
+go -C hooks/bash-approve build -trimpath -buildvcs=false -o "$runtime_root/approve-bash" .
 chmod +x "$runtime_root/run-hook.sh"
 ```
 
-4. Hook auto-compiles on first run. `run-hook.sh` rebuilds Go binary whenever source files change, so no manual build step.
+4. Hooks execute the prebuilt binary. They never build or download anything at
+   runtime.
 
 ## Configuration
 
@@ -249,6 +297,10 @@ See `categories.yaml` for the full reference with examples.
 ## Telemetry
 
 Every decision is logged to a local SQLite database in the user state directory. If `XDG_STATE_HOME` is set to an absolute path, the database lives at `$XDG_STATE_HOME/claude-bash-approve/telemetry.db`; otherwise it defaults to `~/.local/state/claude-bash-approve/telemetry.db`.
+
+For production OpenCode mode, pass `--no-telemetry`. In that mode the runtime
+does not open, migrate or create the SQLite database and does not create the
+state directory.
 
 On first run, the hook also performs a one-time migration from the common legacy path `~/.claude/hooks/bash-approve/telemetry.db` when that file exists. This lets you review what the hook approved, denied, or passed through:
 

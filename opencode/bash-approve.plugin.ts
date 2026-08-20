@@ -4,7 +4,7 @@ import type { Hooks, PluginInput } from "@opencode-ai/plugin"
 const HOOK_PATH = "__HOOK_PATH__"
 
 type Decision = {
-  decision: "allow" | "deny" | "ask"
+  decision: "allow" | "deny" | "ask" | "noop"
   reason?: string | undefined
 }
 
@@ -62,7 +62,12 @@ function parseDecision(stdout: string): Decision {
 
   try {
     const parsed = JSON.parse(stdout) as Partial<Decision>
-    if (parsed.decision === "allow" || parsed.decision === "deny" || parsed.decision === "ask") {
+    if (
+      parsed.decision === "allow" ||
+      parsed.decision === "deny" ||
+      parsed.decision === "ask" ||
+      parsed.decision === "noop"
+    ) {
       return {
         decision: parsed.decision,
         reason: parsed.reason ?? undefined,

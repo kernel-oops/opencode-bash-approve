@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"testing"
 
@@ -2322,6 +2323,75 @@ func TestOpenCodeModeCLITelemetryUsesOpenCodeAgent(t *testing.T) {
 	assertTelemetryAgentForCommand(t, stateRoot, "git status", "opencode")
 }
 
+func TestOpenCodeModeCLINoTelemetryCreatesNoState(t *testing.T) {
+	stateRoot := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", stateRoot)
+
+	out := runApproveBashCLI(t, []string{"--opencode", "--no-telemetry"}, []byte(`{"tool":"bash","command":"git status","cwd":"/repo"}`))
+	assert.JSONEq(t, `{"decision":"allow","reason":"git read op"}`, out)
+
+	_, err := os.Stat(filepath.Join(stateRoot, "claude-bash-approve"))
+	assert.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestOpenCodeModeCLIConfigFailureDeniesExplicitly(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing.yaml")
+	out := runApproveBashCLI(
+		t,
+		[]string{"--opencode", "--no-telemetry", "--config", missing},
+		[]byte(`{"tool":"bash","command":"git status","cwd":"/repo"}`),
+	)
+	assert.JSONEq(t, `{"decision":"deny","reason":"cannot read config `+missing+`","error":"config-error"}`, out)
+}
+
+func TestOpenCodeModeCLIRejectsMalformedInput(t *testing.T) {
+	out := runApproveBashCLI(t, []string{"--opencode", "--no-telemetry"}, []byte(`{"tool":"bash","command":"git status","cwd":"/repo","extra":true}`))
+
+	var parsed OpenCodeOutput
+	require.NoError(t, json.Unmarshal([]byte(out), &parsed))
+	assert.Equal(t, decisionDeny, parsed.Decision)
+	assert.Equal(t, "invalid-input", parsed.Error)
+	assert.Contains(t, parsed.Reason, "unknown field")
+}
+
+func TestOpenCodeModeCLIUnsupportedToolIsGenuineNoop(t *testing.T) {
+	out := runApproveBashCLI(t, []string{"--opencode", "--no-telemetry"}, []byte(`{"tool":"read","command":"ignored","cwd":"/repo"}`))
+	assert.JSONEq(t, `{"decision":"noop"}`, out)
+}
+
+func TestVersionIdentity(t *testing.T) {
+	originalVersion, originalCommit, originalDate := buildVersion, buildCommit, buildDate
+	buildVersion = "1.2.3"
+	buildCommit = "0123456789abcdef"
+	buildDate = "2026-08-20T12:00:00Z"
+	t.Cleanup(func() {
+		buildVersion, buildCommit, buildDate = originalVersion, originalCommit, originalDate
+	})
+
+	assert.Contains(t, humanVersion(), "approve-bash 1.2.3")
+	assert.Contains(t, humanVersion(), "commit 0123456789abcdef")
+	encoded, err := machineVersion()
+	require.NoError(t, err)
+	assert.JSONEq(t, `{
+		"name":"approve-bash",
+		"version":"1.2.3",
+		"commit":"0123456789abcdef",
+		"build_date":"2026-08-20T12:00:00Z",
+		"go_version":"`+runtime.Version()+`",
+		"protocol":"opencode-bash-approve",
+		"protocol_version":1
+	}`, string(encoded))
+}
+
+func TestVersionJSONCLIRequiresNoStdin(t *testing.T) {
+	out := runApproveBashCLI(t, []string{"--version-json"}, nil)
+	var identity buildIdentity
+	require.NoError(t, json.Unmarshal([]byte(out), &identity))
+	assert.Equal(t, binaryName, identity.Name)
+	assert.Equal(t, openCodeProtocol, identity.Protocol)
+	assert.Equal(t, openCodeProtocolVersion, identity.ProtocolVersion)
+}
+
 func writeTestConfig(t *testing.T, content string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -2355,6 +2425,13 @@ func TestLoadConfigFromPath(t *testing.T) {
 		path := writeTestConfig(t, "{{invalid yaml")
 		_, err := loadConfigFromPath(path)
 		assert.Error(t, err)
+	})
+
+	t.Run("unknown field returns error", func(t *testing.T) {
+		path := writeTestConfig(t, "enabled:\n  - all\nsafe_cd_prefix:\n  - /tmp\n")
+		_, err := loadConfigFromPath(path)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "field safe_cd_prefix not found")
 	})
 
 	t.Run("valid config parsed", func(t *testing.T) {

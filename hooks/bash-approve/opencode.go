@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 )
 
 type OpenCodeInput struct {
@@ -15,6 +16,20 @@ type OpenCodeInput struct {
 type OpenCodeOutput struct {
 	Decision string `json:"decision"`
 	Reason   string `json:"reason,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+func validateOpenCodeInput(input OpenCodeInput) error {
+	if input.Tool != "bash" {
+		return nil
+	}
+	if input.Command == "" {
+		return fmt.Errorf("invalid OpenCode input: bash command is required")
+	}
+	if input.Cwd == "" || !filepath.IsAbs(input.Cwd) {
+		return fmt.Errorf("invalid OpenCode input: bash cwd must be absolute")
+	}
+	return nil
 }
 
 func emitOpenCodeOutput(out OpenCodeOutput) {

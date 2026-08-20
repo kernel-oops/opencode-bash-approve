@@ -1,27 +1,13 @@
 #!/usr/bin/env bash
-# Shim script for OpenCode plugin integration.
-# Recompiles the Go binary if sources changed, then runs it in OpenCode mode.
+# Legacy shim for OpenCode plugin integration. Production OpenCode integration
+# should invoke the prebuilt binary directly with an absolute --config path.
 
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 BINARY="$HOOK_DIR/approve-bash"
 
-needs_rebuild=false
-if [ ! -f "$BINARY" ]; then
-    needs_rebuild=true
-else
-    for src in "$HOOK_DIR"/*.go "$HOOK_DIR"/go.mod "$HOOK_DIR"/go.sum; do
-        if [ "$src" -nt "$BINARY" ]; then
-            needs_rebuild=true
-            break
-        fi
-    done
+if [ ! -x "$BINARY" ]; then
+    echo "bash-approve: prebuilt runtime is missing; falling back to OpenCode ask flow" >&2
+    exit 1
 fi
 
-if [ "$needs_rebuild" = true ]; then
-    if ! (cd "$HOOK_DIR" && go build -o "$BINARY" .) >&2; then
-        echo "bash-approve: build failed, falling back to OpenCode ask flow" >&2
-        exit 0
-    fi
-fi
-
-exec "$BINARY" --opencode
+exec "$BINARY" --opencode "$@"
