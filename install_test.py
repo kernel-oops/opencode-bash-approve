@@ -127,6 +127,7 @@ class OpenCodeInstallTest(InstallCLITestCase):
         global_config = self.home / ".config" / "opencode" / "opencode.json"
 
         self.assertTrue((self.runtime_root / "approve-bash").is_file())
+        self.assertTrue((self.runtime_root / "opencode-balanced.yaml").is_file())
         self.assertTrue(project_plugin.is_file())
         self.assertTrue(global_plugin.is_file())
         self.assertFalse((self.home / ".config" / "opencode" / "bash-approve").exists())

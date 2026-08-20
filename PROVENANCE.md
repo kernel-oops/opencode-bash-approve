@@ -7,7 +7,8 @@ This is an OpenCode-oriented maintained port of
 - Upstream licence: MIT; the original `LICENSE` is retained verbatim.
 - Port version source: `VERSION`
 - Runtime source: `hooks/bash-approve/`
-- Configuration shipped with the binary: `hooks/bash-approve/categories.yaml`
+- Preserved upstream stock policy: `hooks/bash-approve/categories.yaml`
+- Maintained deployment policy: `hooks/bash-approve/opencode-balanced.yaml`
 
 Release artefacts are built only by `.github/workflows/release-artifact.yml`.
 The workflow records the exact source commit, commit-derived UTC build date,
@@ -20,3 +21,9 @@ and archive ownership and ordering are normalised.
 
 The runtime never downloads dependencies or builds itself. Production
 OpenCode integration invokes the prebuilt executable directly.
+
+For deployment, verify the archive against its adjacent `.tar.gz.sha256`, then
+run `sha256sum -c SHA256SUMS` inside the extracted archive. Record the selected
+`opencode-balanced.yaml` checksum together with `BUILD-INFO.json`; its `commit`
+identifies the maintained source and `upstream_commit` identifies the stock
+policy baseline. Always pass the verified policy by its explicit absolute path.

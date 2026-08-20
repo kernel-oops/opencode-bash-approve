@@ -46,7 +46,8 @@ Shared runtime installs to `$XDG_DATA_HOME/claude-bash-approve` when `XDG_DATA_H
 
 Use the Linux x86-64 archive produced by the **Linux x86-64 artefact** GitHub
 Actions workflow. The archive contains the prebuilt `approve-bash` executable,
-`categories.yaml`, a per-file `SHA256SUMS`, exact `BUILD-INFO.json`, and
+the stock `categories.yaml`, the maintained `opencode-balanced.yaml`, a
+per-file `SHA256SUMS`, exact `BUILD-INFO.json`, and
 `LICENSE`/`NOTICE`/`PROVENANCE.md`/`THIRD_PARTY_LICENSES.txt`. The adjacent
 `.tar.gz.sha256` covers the archive itself. The third-party bundle is generated
 from every external Go module linked into the Linux x86-64 binary and checked
@@ -57,8 +58,36 @@ timeout and a controlled environment supplied by OpenCode. Pass an explicit
 absolute configuration path and disable state access explicitly:
 
 ```text
-/absolute/path/approve-bash --opencode --config /absolute/path/categories.yaml --no-telemetry
+/absolute/path/approve-bash --opencode --config /absolute/path/opencode-balanced.yaml --no-telemetry
 ```
+
+OpenCode static permission allows run first and remain unchanged. The plugin's
+evaluator handles only Bash calls that still produce an unresolved static ask;
+it can resolve those asks but does not replace or broaden the static policy.
+The maintained policy is intentionally explicit and never selects `all`.
+
+It was selected from a private calibration against an observed 117-row
+static-ask corpus: balanced produced **65 allow / 2 ask / 50 noop**, while the
+convenience policy produced **69 allow / 3 ask / 45 noop**. Balanced sacrifices
+only four direct allows while bounding the category surface exposed by future
+matcher additions.
+
+Before deployment, verify both checksum layers and retain the policy checksum
+with the build provenance:
+
+```bash
+sha256sum -c approve-bash_VERSION_linux_amd64.tar.gz.sha256
+mkdir approve-bash-verified
+tar -xzf approve-bash_VERSION_linux_amd64.tar.gz -C approve-bash-verified
+cd approve-bash-verified
+sha256sum -c SHA256SUMS
+sha256sum opencode-balanced.yaml
+cat BUILD-INFO.json
+```
+
+Configure the wrapper or direct invocation with the verified absolute
+`opencode-balanced.yaml` path. Do not substitute the stock `categories.yaml`,
+which intentionally preserves upstream's `all` policy.
 
 The process reads exactly one JSON object from stdin and writes exactly one
 decision object to stdout. Decisions are `allow`, `deny`, `ask`, or `noop`.
@@ -210,10 +239,13 @@ chmod +x "$runtime_root/run-hook.sh"
 ## Configuration
 
 Command categories are configured in `hooks/bash-approve/categories.yaml` for
-Bash command matching. An empty configuration retains the upstream `all`
-default, but every shipped wrapper requires this file and passes its absolute
-path explicitly; a missing file falls back to host approval without running
-the binary. `Read` and `Grep` are governed by repo/worktree path checks instead.
+Bash command matching. That file preserves the upstream `all` policy. Our
+OpenCode integration instead requires
+`hooks/bash-approve/opencode-balanced.yaml` and passes its explicit absolute
+path; it does not fall back to the stock file or to implicit `all`. An absent
+deployment policy falls back to OpenCode's ask flow without running the binary.
+Other shipped wrappers continue to select the stock file explicitly. `Read`
+and `Grep` are governed by repo/worktree path checks instead.
 
 ### Enabled / Disabled
 

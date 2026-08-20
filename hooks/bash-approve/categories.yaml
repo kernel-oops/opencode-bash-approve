@@ -59,7 +59,7 @@
 # disabled:
 #   - git write op
 
-# Shipped integrations use an explicit policy rather than the parser's legacy
-# empty-file default.
+# Preserved upstream stock policy. Our OpenCode deployment deliberately uses
+# the separately maintained opencode-balanced.yaml instead.
 enabled:
   - all

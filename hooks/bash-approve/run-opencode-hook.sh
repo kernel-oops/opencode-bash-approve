@@ -4,7 +4,7 @@
 
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 BINARY="$HOOK_DIR/approve-bash"
-CONFIG="$HOOK_DIR/categories.yaml"
+CONFIG="$HOOK_DIR/opencode-balanced.yaml"
 
 if [ ! -r "$CONFIG" ]; then
     echo "bash-approve: required config is missing; falling back to OpenCode ask flow" >&2

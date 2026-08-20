@@ -13,7 +13,7 @@ import (
 	"go.yaml.in/yaml/v4"
 )
 
-func TestShippedConfigHasExplicitPolicy(t *testing.T) {
+func TestStockConfigRemainsExplicitAllPolicy(t *testing.T) {
 	data, err := os.ReadFile("categories.yaml")
 	require.NoError(t, err)
 	var cfg Config
@@ -21,17 +21,32 @@ func TestShippedConfigHasExplicitPolicy(t *testing.T) {
 	assert.Equal(t, []string{"all"}, cfg.Enabled)
 }
 
+func TestOpenCodeBalancedConfigHasExactExplicitPolicy(t *testing.T) {
+	want := []string{
+		"wrapper", "git read op", "git write op", "python", "node", "rust", "make", "nix", "shell",
+		"gh read op", "gh api", "go", "swift", "kubectl read op", "kubectl port-forward", "bq", "acli",
+		"roborev show", "roborev read op", "ruby", "shellcheck", "grpcurl", "git-spice", "kata", "tmux",
+	}
+
+	cfg, err := loadExplicitConfigFromPath("opencode-balanced.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, want, cfg.Enabled)
+	assert.Empty(t, cfg.Disabled)
+	assert.NotContains(t, cfg.Enabled, "all")
+}
+
 func TestLegacyWrappersRequireAndPassExplicitConfig(t *testing.T) {
 	tests := []struct {
 		name            string
 		script          string
+		config          string
 		missingExitCode int
 		wantArgs        []string
 	}{
-		{name: "claude", script: "run-hook.sh", missingExitCode: 0, wantArgs: []string{"--config"}},
-		{name: "opencode", script: "run-opencode-hook.sh", missingExitCode: 1, wantArgs: []string{"--opencode", "--config"}},
-		{name: "codex", script: "run-codex-hook.sh", missingExitCode: 0, wantArgs: []string{"--codex", "--config"}},
-		{name: "pi", script: "run-pi-runtime.sh", missingExitCode: 1, wantArgs: []string{"--pi", "--config"}},
+		{name: "claude", script: "run-hook.sh", config: "categories.yaml", missingExitCode: 0, wantArgs: []string{"--config"}},
+		{name: "opencode", script: "run-opencode-hook.sh", config: "opencode-balanced.yaml", missingExitCode: 1, wantArgs: []string{"--opencode", "--config"}},
+		{name: "codex", script: "run-codex-hook.sh", config: "categories.yaml", missingExitCode: 0, wantArgs: []string{"--codex", "--config"}},
+		{name: "pi", script: "run-pi-runtime.sh", config: "categories.yaml", missingExitCode: 1, wantArgs: []string{"--pi", "--config"}},
 	}
 
 	for _, tt := range tests {
@@ -60,7 +75,7 @@ func TestLegacyWrappersRequireAndPassExplicitConfig(t *testing.T) {
 			_, err = os.Stat(argsPath)
 			assert.True(t, errors.Is(err, os.ErrNotExist), "binary ran without config")
 
-			configPath := filepath.Join(dir, "categories.yaml")
+			configPath := filepath.Join(dir, tt.config)
 			require.NoError(t, os.WriteFile(configPath, []byte("enabled:\n  - all\n"), 0o600))
 			cmd = exec.Command(scriptPath)
 			cmd.Env = append(os.Environ(), "ARGS_FILE="+argsPath)

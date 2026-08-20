@@ -1,0 +1,40 @@
+# Maintained balanced policy for our OpenCode deployment.
+#
+# OpenCode's own static permission rules run first and remain unchanged. This
+# evaluator therefore sees only unresolved asks; it does not replace or widen
+# OpenCode's static allows.
+#
+# Private calibration used a 117-row observed static-ask corpus. Results were:
+#   balanced:    65 allow / 2 ask / 50 noop
+#   convenience: 69 allow / 3 ask / 45 noop
+# Balanced is selected because it sacrifices only four direct allows while
+# bounding the category surface available to future matcher additions.
+#
+# Keep this list explicit. In particular, do not replace it with `all`: a new
+# upstream category must remain disabled until deliberately reviewed here.
+enabled:
+  - wrapper
+  - git read op
+  - git write op
+  - python
+  - node
+  - rust
+  - make
+  - nix
+  - shell
+  - gh read op
+  - gh api
+  - go
+  - swift
+  - kubectl read op
+  - kubectl port-forward
+  - bq
+  - acli
+  - roborev show
+  - roborev read op
+  - ruby
+  - shellcheck
+  - grpcurl
+  - git-spice
+  - kata
+  - tmux

@@ -14,6 +14,7 @@ from typing import Any
 
 RUNTIME_FILES = [
     "categories.yaml",
+    "opencode-balanced.yaml",
     "run-hook.sh",
     "run-opencode-hook.sh",
     "run-pi-runtime.sh",
