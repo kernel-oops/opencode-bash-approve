@@ -60,6 +60,18 @@ jobs:
           go test -race ./...
           go vet ./...
 
+      - name: Verify workflow policy
+        run: python3 -m unittest scripts/test_workflow_policy.py
+
+      - name: Test and verify linked-module licence coverage
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          python3 -m unittest scripts/test_generate_third_party_licenses.py
+          python3 scripts/generate-third-party-licenses.py --check THIRD_PARTY_LICENSES.txt
+
       - name: Build deterministic Linux x86-64 binary
         env:
           VERSION: ${{ steps.identity.outputs.version }}
@@ -85,7 +97,7 @@ jobs:
         run: |
           set -euo pipefail
           package=dist/package
-          cp hooks/bash-approve/categories.yaml LICENSE NOTICE PROVENANCE.md "$package/"
+          cp hooks/bash-approve/categories.yaml LICENSE NOTICE PROVENANCE.md THIRD_PARTY_LICENSES.txt "$package/"
           python3 - <<'PY'
           import json
           import os

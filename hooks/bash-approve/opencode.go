@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type OpenCodeInput struct {
@@ -20,6 +21,9 @@ type OpenCodeOutput struct {
 }
 
 func validateOpenCodeInput(input OpenCodeInput) error {
+	if strings.TrimSpace(input.Tool) == "" {
+		return fmt.Errorf("invalid OpenCode input: tool is required")
+	}
 	if input.Tool != "bash" {
 		return nil
 	}

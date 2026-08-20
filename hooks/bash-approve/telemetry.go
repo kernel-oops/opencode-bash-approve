@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -61,11 +62,6 @@ type pluginMetadata struct {
 }
 
 func copyFileStdlib(src, dst string) (err error) {
-	info, err := os.Stat(src)
-	if err != nil {
-		return err
-	}
-
 	in, err := os.Open(src)
 	if err != nil {
 		return err
@@ -76,11 +72,11 @@ func copyFileStdlib(src, dst string) (err error) {
 		}
 	}()
 
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+	if err := ensurePrivateTelemetryDirectory(dst); err != nil {
 		return err
 	}
 
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return err
 	}
@@ -94,7 +90,71 @@ func copyFileStdlib(src, dst string) (err error) {
 		return err
 	}
 
-	return os.Chmod(dst, info.Mode().Perm())
+	return os.Chmod(dst, 0o600)
+}
+
+func ensurePrivateTelemetryDirectory(dbPath string) error {
+	dir := filepath.Dir(dbPath)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	info, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("telemetry directory is not a real directory: %s", dir)
+	}
+	return os.Chmod(dir, 0o700)
+}
+
+func hardenTelemetryArtifacts(dbPath string) error {
+	if err := ensurePrivateTelemetryDirectory(dbPath); err != nil {
+		return err
+	}
+	for _, path := range telemetryArtifactPaths(dbPath) {
+		info, err := os.Lstat(path)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return fmt.Errorf("telemetry artifact is not a regular file: %s", path)
+		}
+		if err := os.Chmod(path, 0o600); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func prepareTelemetryDBPath(dbPath string) error {
+	if err := ensurePrivateTelemetryDirectory(dbPath); err != nil {
+		return err
+	}
+	info, err := os.Lstat(dbPath)
+	if err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return fmt.Errorf("telemetry database is not a regular file: %s", dbPath)
+		}
+		if err := os.Chmod(dbPath, 0o600); err != nil {
+			return err
+		}
+	} else {
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		file, createErr := os.OpenFile(dbPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o600)
+		if createErr != nil {
+			return createErr
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			return closeErr
+		}
+	}
+	return hardenTelemetryArtifacts(dbPath)
 }
 
 func cleanupFiles(paths []string) {
@@ -145,7 +205,10 @@ func temporaryTelemetryFilePath(path, pattern string) (string, error) {
 }
 
 func copyLegacyTelemetryFiles(legacyPath, destPath string) error {
-	if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
+	if err := ensurePrivateTelemetryDirectory(destPath); err != nil {
+		return err
+	}
+	if err := hardenTelemetryArtifacts(destPath); err != nil {
 		return err
 	}
 
@@ -199,6 +262,10 @@ func copyLegacyTelemetryFiles(legacyPath, destPath string) error {
 				copied[len(copied)-1].backup = ""
 				return err
 			}
+			rollbackCopiedTelemetryFiles(copied)
+			return err
+		}
+		if err := os.Chmod(dst, 0o600); err != nil {
 			rollbackCopiedTelemetryFiles(copied)
 			return err
 		}
@@ -338,21 +405,31 @@ func ensureTelemetryColumn(db *sql.DB, name, definition string) bool {
 }
 
 func validateTelemetryDBPath(path string) bool {
+	if err := prepareTelemetryDBPath(path); err != nil {
+		return false
+	}
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return false
 	}
 	defer db.Close() //nolint:errcheck // best-effort telemetry validation
 
-	return initTelemetrySchema(db)
+	return initTelemetrySchema(db) && hardenTelemetryArtifacts(path) == nil
 }
 
 func openAndValidateTelemetryDB(path string) (*sql.DB, bool) {
+	if err := prepareTelemetryDBPath(path); err != nil {
+		return nil, false
+	}
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, false
 	}
 	if !initTelemetrySchema(db) {
+		db.Close() //nolint:errcheck // best-effort telemetry
+		return nil, false
+	}
+	if err := hardenTelemetryArtifacts(path); err != nil {
 		db.Close() //nolint:errcheck // best-effort telemetry
 		return nil, false
 	}
@@ -391,6 +468,9 @@ func migrateLegacyTelemetryDB(legacyPath, destPath string) (string, bool) {
 }
 
 func ensureTelemetryDBReady(destPath string) (string, bool) {
+	if err := ensurePrivateTelemetryDirectory(destPath); err != nil {
+		return "", false
+	}
 	if _, err := os.Stat(destPath); err == nil {
 		if validateTelemetryDBPath(destPath) {
 			return destPath, true
@@ -413,18 +493,10 @@ func ensureTelemetryDBReady(destPath string) (string, bool) {
 
 	legacyPath, ok := legacyTelemetryDBPath(telemetryExecutable)
 	if !ok {
-		if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
-			cleanupTelemetryArtifacts(destPath)
-			return "", false
-		}
 		return destPath, true
 	}
 	if _, err := os.Stat(legacyPath); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
-			return "", false
-		}
-		if err := os.MkdirAll(filepath.Dir(destPath), 0o755); err != nil {
-			cleanupTelemetryArtifacts(destPath)
 			return "", false
 		}
 		return destPath, true
@@ -458,4 +530,24 @@ func logDecision(db *sql.DB, agent, payload, command, decision, reason string) {
 	}
 	_, _ = db.Exec(`INSERT INTO decisions (agent, binary_version, payload, command, decision, reason) VALUES (?, ?, ?, ?, ?, ?)`,
 		agent, telemetryBinaryVersion(), payload, command, decision, reason)
+	hardenOpenTelemetryFiles(db)
+}
+
+func hardenOpenTelemetryFiles(db *sql.DB) {
+	rows, err := db.Query(`PRAGMA database_list`)
+	if err != nil {
+		return
+	}
+	defer rows.Close() //nolint:errcheck // best-effort telemetry hardening
+	for rows.Next() {
+		var sequence int
+		var name, path string
+		if err := rows.Scan(&sequence, &name, &path); err != nil {
+			return
+		}
+		if name == "main" && path != "" {
+			_ = hardenTelemetryArtifacts(path)
+			return
+		}
+	}
 }

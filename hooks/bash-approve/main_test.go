@@ -2354,6 +2354,39 @@ func TestOpenCodeModeCLIRejectsMalformedInput(t *testing.T) {
 	assert.Contains(t, parsed.Reason, "unknown field")
 }
 
+func TestOpenCodeModeCLIRejectsDuplicateCommandMember(t *testing.T) {
+	out := runApproveBashCLI(
+		t,
+		[]string{"--opencode", "--no-telemetry"},
+		[]byte(`{"tool":"bash","command":"rm -rf /","command":"git status","cwd":"/repo"}`),
+	)
+
+	var parsed OpenCodeOutput
+	require.NoError(t, json.Unmarshal([]byte(out), &parsed))
+	assert.Equal(t, decisionDeny, parsed.Decision)
+	assert.Equal(t, "invalid-input", parsed.Error)
+	assert.Contains(t, parsed.Reason, `duplicate JSON member "command"`)
+}
+
+func TestRejectDuplicateJSONMembersRecursively(t *testing.T) {
+	err := rejectDuplicateJSONMembers([]byte(`{"outer":{"value":1,"value":2}}`))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `duplicate JSON member "value" at $.outer`)
+}
+
+func TestOpenCodeModeCLIRejectsMissingTool(t *testing.T) {
+	for _, input := range []string{`{}`, `null`, `{"tool":"   "}`} {
+		t.Run(input, func(t *testing.T) {
+			out := runApproveBashCLI(t, []string{"--opencode", "--no-telemetry"}, []byte(input))
+			var parsed OpenCodeOutput
+			require.NoError(t, json.Unmarshal([]byte(out), &parsed))
+			assert.Equal(t, decisionDeny, parsed.Decision)
+			assert.Equal(t, "invalid-input", parsed.Error)
+			assert.Contains(t, parsed.Reason, "tool is required")
+		})
+	}
+}
+
 func TestOpenCodeModeCLIUnsupportedToolIsGenuineNoop(t *testing.T) {
 	out := runApproveBashCLI(t, []string{"--opencode", "--no-telemetry"}, []byte(`{"tool":"read","command":"ignored","cwd":"/repo"}`))
 	assert.JSONEq(t, `{"decision":"noop"}`, out)
@@ -2432,6 +2465,13 @@ func TestLoadConfigFromPath(t *testing.T) {
 		_, err := loadConfigFromPath(path)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "field safe_cd_prefix not found")
+	})
+
+	t.Run("unknown category returns error", func(t *testing.T) {
+		path := writeTestConfig(t, "enabled:\n  - git read typo\n")
+		_, err := loadConfigFromPath(path)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), `unknown enabled category "git read typo"`)
 	})
 
 	t.Run("valid config parsed", func(t *testing.T) {

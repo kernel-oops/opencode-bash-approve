@@ -47,8 +47,10 @@ Shared runtime installs to `$XDG_DATA_HOME/claude-bash-approve` when `XDG_DATA_H
 Use the Linux x86-64 archive produced by the **Linux x86-64 artefact** GitHub
 Actions workflow. The archive contains the prebuilt `approve-bash` executable,
 `categories.yaml`, a per-file `SHA256SUMS`, exact `BUILD-INFO.json`, and
-`LICENSE`/`NOTICE`/`PROVENANCE.md`. The adjacent `.tar.gz.sha256` covers the
-archive itself.
+`LICENSE`/`NOTICE`/`PROVENANCE.md`/`THIRD_PARTY_LICENSES.txt`. The adjacent
+`.tar.gz.sha256` covers the archive itself. The third-party bundle is generated
+from every external Go module linked into the Linux x86-64 binary and checked
+against the build dependency graph by CI.
 
 Production integration should execute the binary directly, with a bounded
 timeout and a controlled environment supplied by OpenCode. Pass an explicit
@@ -207,7 +209,11 @@ chmod +x "$runtime_root/run-hook.sh"
 
 ## Configuration
 
-Command categories are configured in `hooks/bash-approve/categories.yaml` for Bash command matching. When this file is absent or empty, all matched Bash commands are approved (with some exceptions noted below). `Read` and `Grep` are governed by repo/worktree path checks instead.
+Command categories are configured in `hooks/bash-approve/categories.yaml` for
+Bash command matching. An empty configuration retains the upstream `all`
+default, but every shipped wrapper requires this file and passes its absolute
+path explicitly; a missing file falls back to host approval without running
+the binary. `Read` and `Grep` are governed by repo/worktree path checks instead.
 
 ### Enabled / Disabled
 
@@ -297,6 +303,12 @@ See `categories.yaml` for the full reference with examples.
 ## Telemetry
 
 Every decision is logged to a local SQLite database in the user state directory. If `XDG_STATE_HOME` is set to an absolute path, the database lives at `$XDG_STATE_HOME/claude-bash-approve/telemetry.db`; otherwise it defaults to `~/.local/state/claude-bash-approve/telemetry.db`.
+
+Telemetry contains the raw hook payload and extracted command. Commands can
+contain paths, arguments, environment assignments, tokens or other sensitive
+material. When telemetry is enabled, the runtime restricts its application
+state directory to mode `0700` and its SQLite database, journal, WAL and shared
+memory files to mode `0600`.
 
 For production OpenCode mode, pass `--no-telemetry`. In that mode the runtime
 does not open, migrate or create the SQLite database and does not create the

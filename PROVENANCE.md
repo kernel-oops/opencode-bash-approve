@@ -12,9 +12,11 @@ This is an OpenCode-oriented maintained port of
 Release artefacts are built only by `.github/workflows/release-artifact.yml`.
 The workflow records the exact source commit, commit-derived UTC build date,
 Go toolchain version, target and build flags in `BUILD-INFO.json`; it also
-includes `LICENSE`, `NOTICE`, this file and `SHA256SUMS` in the archive. The
-archive timestamp is derived from the source commit, and archive ownership and
-ordering are normalised.
+includes `LICENSE`, `NOTICE`, this file, `THIRD_PARTY_LICENSES.txt` and
+`SHA256SUMS` in the archive. `THIRD_PARTY_LICENSES.txt` is deterministically
+regenerated and checked against every external module linked for Linux/amd64
+with CGO disabled. The archive timestamp is derived from the source commit,
+and archive ownership and ordering are normalised.
 
 The runtime never downloads dependencies or builds itself. Production
 OpenCode integration invokes the prebuilt executable directly.

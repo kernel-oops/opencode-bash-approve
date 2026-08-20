@@ -3,10 +3,16 @@ set -euo pipefail
 
 RUNTIME_DIR="$(cd "$(dirname "$0")" && pwd)"
 BINARY="$RUNTIME_DIR/approve-bash"
+CONFIG="$RUNTIME_DIR/categories.yaml"
+
+if [ ! -r "$CONFIG" ]; then
+  echo "bash-approve: required config is missing" >&2
+  exit 1
+fi
 
 if [ ! -x "$BINARY" ]; then
   echo "bash-approve: prebuilt runtime is missing" >&2
   exit 1
 fi
 
-exec "$BINARY" --pi "$@"
+exec "$BINARY" --pi --config "$CONFIG" "$@"

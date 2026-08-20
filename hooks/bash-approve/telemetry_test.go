@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
 
@@ -34,6 +35,13 @@ func assertTelemetryAgentForCommand(t *testing.T, stateRoot, command, want strin
 		t.Fatal(err)
 	}
 	assert.Equal(t, want, agent)
+}
+
+func assertFileMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, want, info.Mode().Perm(), path)
 }
 
 func TestTelemetryDBPathUsesXDGStateHome(t *testing.T) {
@@ -265,8 +273,10 @@ func TestCopyLegacyTelemetryFilesCopiesDatabaseAndSidecars(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(legacy), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	oldUmask := syscall.Umask(0)
+	defer syscall.Umask(oldUmask)
 	for _, suffix := range []string{"", "-wal", "-shm", "-journal"} {
-		if err := os.WriteFile(legacy+suffix, []byte("legacy"+suffix), 0o600); err != nil {
+		if err := os.WriteFile(legacy+suffix, []byte("legacy"+suffix), 0o666); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -281,10 +291,12 @@ func TestCopyLegacyTelemetryFilesCopiesDatabaseAndSidecars(t *testing.T) {
 		if string(got) != "legacy"+suffix {
 			t.Fatalf("dest%s = %q", suffix, string(got))
 		}
+		assertFileMode(t, dest+suffix, 0o600)
 	}
+	assertFileMode(t, filepath.Dir(dest), 0o700)
 }
 
-func TestCopyLegacyTelemetryFilesPreservesSourcePermissions(t *testing.T) {
+func TestCopyLegacyTelemetryFilesRestrictsDestinationPermissions(t *testing.T) {
 	root := t.TempDir()
 	legacy := filepath.Join(root, "legacy", "telemetry.db")
 	dest := filepath.Join(root, "state", "telemetry.db")
@@ -295,20 +307,15 @@ func TestCopyLegacyTelemetryFilesPreservesSourcePermissions(t *testing.T) {
 	oldUmask := syscall.Umask(0o022)
 	defer syscall.Umask(oldUmask)
 
-	if err := os.WriteFile(legacy, []byte("legacy"), 0o600); err != nil {
+	if err := os.WriteFile(legacy, []byte("legacy"), 0o666); err != nil {
 		t.Fatal(err)
 	}
 	if err := copyLegacyTelemetryFiles(legacy, dest); err != nil {
 		t.Fatal(err)
 	}
 
-	info, err := os.Stat(dest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Fatalf("dest mode = %#o, want %#o", info.Mode().Perm(), 0o600)
-	}
+	assertFileMode(t, filepath.Dir(dest), 0o700)
+	assertFileMode(t, dest, 0o600)
 }
 
 func TestDeleteLegacyTelemetryFilesRemovesLegacyFilesAfterSuccess(t *testing.T) {
@@ -666,6 +673,33 @@ func TestOpenTelemetryDBCreatesFreshDatabaseWhenLegacyPathUnavailable(t *testing
 		t.Fatal("expected fresh db")
 	}
 	defer func() { closeTestDB(t, opened) }()
+}
+
+func TestOpenTelemetryDBRestrictsDirectoryDatabaseAndWALModes(t *testing.T) {
+	root := t.TempDir()
+	stateRoot := filepath.Join(root, "state")
+	oldUmask := syscall.Umask(0)
+	defer syscall.Umask(oldUmask)
+	require.NoError(t, os.MkdirAll(filepath.Join(stateRoot, "claude-bash-approve"), 0o777))
+
+	telemetryHomeDir = func() (string, error) { return root, nil }
+	telemetryExecutable = func() (string, error) { return "", errors.New("no exe") }
+	defer resetTelemetryTestHooks()
+	t.Setenv("XDG_STATE_HOME", stateRoot)
+
+	db := openTelemetryDB()
+	require.NotNil(t, db)
+	defer func() { closeTestDB(t, db) }()
+	var journalMode string
+	require.NoError(t, db.QueryRow(`PRAGMA journal_mode=WAL`).Scan(&journalMode))
+	assert.Equal(t, "wal", strings.ToLower(journalMode))
+	logDecision(db, "opencode", `{"tool":"bash","command":"secret"}`, "secret", decisionAllow, "test")
+
+	dbPath := filepath.Join(stateRoot, "claude-bash-approve", "telemetry.db")
+	assertFileMode(t, filepath.Dir(dbPath), 0o700)
+	for _, path := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
+		assertFileMode(t, path, 0o600)
+	}
 }
 
 func TestOpenTelemetryDBCreatesFreshDatabaseWhenLegacyPathResolvesButFileIsMissing(t *testing.T) {

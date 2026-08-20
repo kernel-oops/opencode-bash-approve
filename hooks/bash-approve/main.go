@@ -117,8 +117,8 @@ type Config struct {
 }
 
 // loadConfig reads categories.yaml from the same directory as the executable.
-// Returns (config, nil) on success or if the file doesn't exist (defaults to all enabled).
-// Returns an error if the file exists but can't be read or parsed.
+// Direct legacy callers retain the upstream missing-file default. Shipped
+// wrappers pass an explicit path, for which absence is an error.
 func loadConfig() (Config, error) {
 	exe, err := os.Executable()
 	if err != nil {
@@ -127,9 +127,7 @@ func loadConfig() (Config, error) {
 	return loadConfigFromPath(filepath.Join(filepath.Dir(exe), "categories.yaml"))
 }
 
-// loadConfigFromPath reads a specific categories.yaml file.
-// Returns (config, nil) if the file doesn't exist (defaults to all enabled).
-// Returns an error if the file exists but can't be parsed.
+// loadConfigFromPath implements legacy adjacent-config discovery.
 func loadConfigFromPath(path string) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -171,7 +169,35 @@ func parseConfig(path string, data []byte) (Config, error) {
 	if cfg.Enabled == nil {
 		cfg.Enabled = []string{"all"}
 	}
+	if err := validateConfigCategories(cfg); err != nil {
+		return Config{}, fmt.Errorf("cannot parse config %s: %w", path, err)
+	}
 	return cfg, nil
+}
+
+func validateConfigCategories(cfg Config) error {
+	supported := map[string]bool{"all": true}
+	for _, patterns := range [][]pattern{wrapperPatterns(), commandPatterns()} {
+		for _, p := range patterns {
+			for _, tag := range p.tags {
+				supported[tag] = true
+			}
+		}
+	}
+	for _, categories := range []struct {
+		field  string
+		values []string
+	}{
+		{field: "enabled", values: cfg.Enabled},
+		{field: "disabled", values: cfg.Disabled},
+	} {
+		for _, value := range categories.values {
+			if !supported[value] {
+				return fmt.Errorf("unknown %s category %q", categories.field, value)
+			}
+		}
+	}
+	return nil
 }
 
 // isEnabled checks whether a pattern is enabled given its tags and pre-built sets.
@@ -240,6 +266,9 @@ func buildPiErrorOutput(code, message string) PiOutput {
 }
 
 func decodeStrictJSON(data []byte, dst any) error {
+	if err := rejectDuplicateJSONMembers(data); err != nil {
+		return err
+	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(dst); err != nil {
@@ -251,6 +280,78 @@ func decodeStrictJSON(data []byte, dst any) error {
 			return fmt.Errorf("unexpected trailing JSON value")
 		}
 		return err
+	}
+	return nil
+}
+
+func rejectDuplicateJSONMembers(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := consumeJSONValue(decoder, "$"); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return fmt.Errorf("unexpected trailing JSON value")
+		}
+		return err
+	}
+	return nil
+}
+
+func consumeJSONValue(decoder *json.Decoder, path string) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := token.(json.Delim)
+	if !ok {
+		return nil
+	}
+	switch delim {
+	case '{':
+		seen := make(map[string]bool)
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return fmt.Errorf("invalid JSON object member at %s", path)
+			}
+			if seen[key] {
+				return fmt.Errorf("duplicate JSON member %q at %s", key, path)
+			}
+			seen[key] = true
+			if err := consumeJSONValue(decoder, path+"."+key); err != nil {
+				return err
+			}
+		}
+		closing, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		if closing != json.Delim('}') {
+			return fmt.Errorf("invalid JSON object at %s", path)
+		}
+	case '[':
+		index := 0
+		for decoder.More() {
+			if err := consumeJSONValue(decoder, fmt.Sprintf("%s[%d]", path, index)); err != nil {
+				return err
+			}
+			index++
+		}
+		closing, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		if closing != json.Delim(']') {
+			return fmt.Errorf("invalid JSON array at %s", path)
+		}
+	default:
+		return fmt.Errorf("unexpected JSON delimiter %q at %s", delim, path)
 	}
 	return nil
 }

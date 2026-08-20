@@ -15,7 +15,10 @@
 # safe_env_prefixes:
 #   - MY_PROJECT_
 #
-# When this file is absent or has no enabled/disabled keys, all commands are approved.
+# A direct binary invocation without --config retains the upstream default when
+# this adjacent file is absent. Shipped wrappers always pass this exact file and
+# fail back to manual approval when it is missing. Empty enabled/disabled keys
+# still default to all for compatibility.
 #
 # Some commands default to "ask" (fall through to Claude Code's permission prompt):
 #   git push, git tag creation/mutation, gh pr create, go mod init
@@ -55,3 +58,8 @@
 # Example: disable all git write operations:
 # disabled:
 #   - git write op
+
+# Shipped integrations use an explicit policy rather than the parser's legacy
+# empty-file default.
+enabled:
+  - all

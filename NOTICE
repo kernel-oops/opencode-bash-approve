@@ -8,3 +8,6 @@ Copyright (c) 2026 Marius van Niekerk
 The original software and this port are distributed under the MIT License. See
 LICENSE. The original copyright and licence notice have been retained without
 modification.
+
+Licence and notice text for external Go modules statically linked into the
+distributed executable is provided in THIRD_PARTY_LICENSES.txt.
