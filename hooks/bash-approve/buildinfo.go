@@ -30,6 +30,16 @@ type buildIdentity struct {
 	ProtocolVersion int    `json:"protocol_version"`
 }
 
+// openCodeIdentity is deliberately the complete, closed identity contract
+// consumed by OpenCode's bound evaluator. Do not add diagnostic fields here.
+type openCodeIdentity struct {
+	Implementation string `json:"implementation"`
+	Version        string `json:"version"`
+	Commit         string `json:"commit"`
+	Protocol       string `json:"protocol"`
+	Platform       string `json:"platform"`
+}
+
 func currentBuildIdentity() buildIdentity {
 	return buildIdentity{
 		Name:            binaryName,
@@ -57,5 +67,11 @@ func humanVersion() string {
 }
 
 func machineVersion() ([]byte, error) {
-	return json.Marshal(currentBuildIdentity())
+	return json.Marshal(openCodeIdentity{
+		Implementation: binaryName,
+		Version:        buildVersion,
+		Commit:         buildCommit,
+		Protocol:       openCodeProtocol,
+		Platform:       runtime.GOOS,
+	})
 }

@@ -28,6 +28,13 @@ class WorkflowPolicyTests(unittest.TestCase):
                 if "actions/checkout@" in text:
                     self.assertRegex(text, r"(?m)^\s+persist-credentials: false$")
 
+    def test_release_workflow_requires_the_closed_opencode_identity(self) -> None:
+        text = WORKFLOWS[1].read_text(encoding="utf-8")
+        self.assertIn('"implementation": "approve-bash"', text)
+        self.assertIn('"platform": "linux"', text)
+        self.assertNotIn('actual["protocol_version"]', text)
+        self.assertRegex(text, r"assert actual == \{")
+
 
 if __name__ == "__main__":
     unittest.main()

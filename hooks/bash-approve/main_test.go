@@ -2405,24 +2405,23 @@ func TestVersionIdentity(t *testing.T) {
 	assert.Contains(t, humanVersion(), "commit 0123456789abcdef")
 	encoded, err := machineVersion()
 	require.NoError(t, err)
-	assert.JSONEq(t, `{
-		"name":"approve-bash",
-		"version":"1.2.3",
-		"commit":"0123456789abcdef",
-		"build_date":"2026-08-20T12:00:00Z",
-		"go_version":"`+runtime.Version()+`",
-		"protocol":"opencode-bash-approve",
-		"protocol_version":1
-	}`, string(encoded))
+	assert.Equal(t,
+		`{"implementation":"approve-bash","version":"1.2.3","commit":"0123456789abcdef","protocol":"opencode-bash-approve","platform":"`+runtime.GOOS+`"}`,
+		string(encoded),
+	)
 }
 
-func TestVersionJSONCLIRequiresNoStdin(t *testing.T) {
+func TestVersionJSONCLIEmitsOnlyStrictOpenCodeIdentity(t *testing.T) {
 	out := runApproveBashCLI(t, []string{"--version-json"}, nil)
-	var identity buildIdentity
+	var identity map[string]any
 	require.NoError(t, json.Unmarshal([]byte(out), &identity))
-	assert.Equal(t, binaryName, identity.Name)
-	assert.Equal(t, openCodeProtocol, identity.Protocol)
-	assert.Equal(t, openCodeProtocolVersion, identity.ProtocolVersion)
+	assert.Equal(t, map[string]any{
+		"implementation": binaryName,
+		"version":        buildVersion,
+		"commit":         buildCommit,
+		"protocol":       openCodeProtocol,
+		"platform":       runtime.GOOS,
+	}, identity)
 }
 
 func writeTestConfig(t *testing.T, content string) string {

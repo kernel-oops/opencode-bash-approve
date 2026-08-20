@@ -128,11 +128,13 @@ jobs:
           from pathlib import Path
 
           actual = json.loads(Path("dist/version.json").read_text(encoding="utf-8"))
-          assert actual["version"] == os.environ["VERSION"]
-          assert actual["commit"] == os.environ["COMMIT"]
-          assert actual["build_date"] == os.environ["BUILD_DATE"]
-          assert actual["protocol"] == "opencode-bash-approve"
-          assert actual["protocol_version"] == 1
+          assert actual == {
+              "implementation": "approve-bash",
+              "version": os.environ["VERSION"],
+              "commit": os.environ["COMMIT"],
+              "protocol": "opencode-bash-approve",
+              "platform": "linux",
+          }
           PY
           rm dist/version.json
 

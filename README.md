@@ -109,9 +109,12 @@ approve-bash --version
 approve-bash --version-json
 ```
 
-`--version-json` is the backwards-compatible machine-readable identity
-endpoint. Existing decision objects are unchanged except that explicit input
-or configuration failures may include an `error` code.
+`--version-json` is the strict machine-readable identity endpoint used by the
+OpenCode evaluator. It emits exactly `implementation`, `version`, `commit`,
+`protocol`, and `platform`; diagnostic build-date and Go-version details remain
+in human-readable `--version` output and release `BUILD-INFO.json`. Existing
+decision objects are unchanged except that explicit input or configuration
+failures may include an `error` code.
 
 ### Claude Code
 
