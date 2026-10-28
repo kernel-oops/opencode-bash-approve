@@ -1,0 +1,18 @@
+{
+  "name": "@kerneloops/opencode-bash-permission-evaluator",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "repository": "https://github.com/kernel-oops/opencode-bash-approve",
+  "exports": {
+    ".": "./index.ts"
+  },
+  "files": [
+    "index.ts",
+    "evaluator.ts",
+    "logger.ts",
+    "README.md",
+    "LICENSE",
+    "OPENCODE-LICENSE"
+  ]
+}

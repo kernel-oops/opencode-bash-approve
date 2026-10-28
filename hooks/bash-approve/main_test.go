@@ -2305,11 +2305,17 @@ func TestBuildOpenCodeOutput(t *testing.T) {
 	t.Run("no decision becomes noop", func(t *testing.T) {
 		out := buildOpenCodeOutput(&result{reason: "unknown"})
 		assert.Equal(t, OpenCodeOutput{Decision: "noop", Reason: "unknown"}, out)
+		encoded, err := json.Marshal(out)
+		require.NoError(t, err)
+		assert.Equal(t, `{"decision":"noop","reason":"unknown"}`, string(encoded))
 	})
 
 	t.Run("nil result becomes noop", func(t *testing.T) {
 		out := buildOpenCodeOutput(nil)
 		assert.Equal(t, OpenCodeOutput{Decision: "noop"}, out)
+		encoded, err := json.Marshal(out)
+		require.NoError(t, err)
+		assert.Equal(t, `{"decision":"noop","reason":""}`, string(encoded))
 	})
 }
 
@@ -2389,7 +2395,7 @@ func TestOpenCodeModeCLIRejectsMissingTool(t *testing.T) {
 
 func TestOpenCodeModeCLIUnsupportedToolIsGenuineNoop(t *testing.T) {
 	out := runApproveBashCLI(t, []string{"--opencode", "--no-telemetry"}, []byte(`{"tool":"read","command":"ignored","cwd":"/repo"}`))
-	assert.JSONEq(t, `{"decision":"noop"}`, out)
+	assert.Equal(t, "{\"decision\":\"noop\",\"reason\":\"\"}\n", out)
 }
 
 func TestVersionIdentity(t *testing.T) {
