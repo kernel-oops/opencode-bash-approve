@@ -10,7 +10,7 @@ import { isAbsolute, join, normalize, parse, relative } from "node:path"
 // This is a plain-Node port of the core `permission/bash-evaluator.ts` service, so it can run as
 // an ordinary external plugin instead of a patch to the OpenCode binary. The wire protocol, the
 // integrity pinning and the TOCTOU protection (open + hash + snapshot into an anonymous O_TMPFILE
-// copy + re-verify before and after use, exec by /proc/self/fd/N rather than a stable path) are
+// copy + re-verify before invocation, exec by /proc/self/fd/N rather than a stable path) are
 // unchanged; only the process-spawning and concurrency plumbing had to be rewritten without
 // Effect or core's ChildProcessSpawner, using Node's own child_process + AbortController instead.
 
@@ -383,43 +383,46 @@ function runProcess(
       // straight into the child; the exec target itself is the executable snapshot's own
       // /proc/self/fd path, so no stable filesystem path to the reviewed bytes is ever named.
       stdio: [opts.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe", files.executable.snapshot.fd, files.policy.snapshot.fd],
-      signal: opts.signal,
     })
     // Always requested as "pipe" above, so these are never null in practice.
     if (!child.stdout || !child.stderr) throw new Error("spawned process is missing stdout/stderr pipes")
     const stdout = collect(child.stdout, opts.maxOutputBytes)
     const stderr = collect(child.stderr, opts.maxOutputBytes)
-    let settledCalled = false
+    let processError: Error | undefined
+    let terminating = false
     let killTimer: NodeJS.Timeout | undefined
-    const onAbort = () => {
+    const killGroup = (signal: NodeJS.Signals) => {
       try {
-        child.kill("SIGTERM")
+        if (child.pid) process.kill(-child.pid, signal)
       } catch {
         // already gone
       }
-      killTimer = setTimeout(() => {
-        try {
-          child.kill("SIGKILL")
-        } catch {
-          // already gone
-        }
-      }, FORCE_KILL_AFTER_MS)
+    }
+    const terminate = () => {
+      if (terminating) return
+      terminating = true
+      killGroup("SIGTERM")
+      killTimer = setTimeout(() => killGroup("SIGKILL"), FORCE_KILL_AFTER_MS)
+    }
+    const onAbort = () => {
+      processError ??= new Error("Checker cancelled")
+      terminate()
     }
     opts.signal.addEventListener("abort", onAbort, { once: true })
-    const finish = () => {
+    const onError = (error: Error) => {
+      processError ??= error
+      terminate()
+    }
+    child.on("error", onError)
+    child.stdin?.on("error", onError)
+    child.stdout.on("error", onError)
+    child.stderr.on("error", onError)
+    // Settlement must wait for close, not AbortError or EPIPE: capacity includes live children.
+    child.on("close", (code) => {
       opts.signal.removeEventListener("abort", onAbort)
       if (killTimer) clearTimeout(killTimer)
-    }
-    child.on("error", (error) => {
-      if (settledCalled) return
-      settledCalled = true
-      finish()
-      reject(error)
-    })
-    child.on("close", (code) => {
-      if (settledCalled) return
-      settledCalled = true
-      finish()
+      killGroup("SIGKILL")
+      if (processError) { reject(processError); return }
       resolve({
         exitCode: code,
         stdout: stdout.buffer,
@@ -428,7 +431,10 @@ function runProcess(
         stderrTruncated: stderr.truncated,
       })
     })
-    if (opts.stdin !== undefined) child.stdin?.end(opts.stdin)
+    if (opts.signal.aborted) onAbort()
+    if (opts.stdin !== undefined && !terminating) {
+      try { child.stdin?.end(opts.stdin) } catch (error) { onError(error as Error) }
+    }
   })
 }
 

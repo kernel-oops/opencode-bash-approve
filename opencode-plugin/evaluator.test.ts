@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
-import { realpathSync } from "node:fs"
+import { existsSync, readFileSync, realpathSync } from "node:fs"
 import { chmod, mkdir, mkdtemp, rename, rm, symlink } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
@@ -22,8 +22,8 @@ const identity = {
   platform: process.platform,
 }
 
-const executable = (code: string) => `#!/bin/bash
-exec /usr/bin/env -u PWD -u SHLVL ${process.execPath} -e '${code.replaceAll("'", "'\\''")}' -- "$@"
+const executable = (code: string, runtime = process.execPath) => `#!/bin/bash
+exec /usr/bin/env -u PWD -u SHLVL ${runtime} -e '${code.replaceAll("'", "'\\''")}' -- "$@"
 `
 const checker = `
 const args = process.argv.slice(1)
@@ -187,3 +187,50 @@ test("times out slow evaluators and reports capacity exhaustion", async () => {
   for (const item of runs) item.abort()
   for (const item of runs) await item.settled
 }, 10_000)
+
+test("timeout retains capacity until a SIGTERM-ignoring process group is killed", async () => {
+  const test1 = await fixture()
+  const parentPid = path.join(test1.directory, "parent.pid")
+  const childPid = path.join(test1.directory, "child.pid")
+  const childCode = `process.on("SIGTERM", () => {}); require("node:fs").writeFileSync(${JSON.stringify(childPid)}, String(process.pid)); setInterval(() => {}, 1000)`
+  const runtime = Bun.which("node")!
+  const code = `
+    if (process.argv.includes("--version-json")) {
+      console.log(${JSON.stringify(JSON.stringify(identity))}); process.exit(0)
+    }
+    process.on("SIGTERM", () => {})
+    require("node:fs").writeFileSync(${JSON.stringify(parentPid)}, String(process.pid))
+    require("node:child_process").spawn(${JSON.stringify(runtime)}, ["-e", ${JSON.stringify(childCode)}], { stdio: "ignore" })
+    setInterval(() => {}, 1000)
+  `
+  const source = executable(code, runtime)
+  await Bun.write(test1.executable, source)
+  const config = { ...test1.config, executable_sha256: digest(source), capacity: 1, timeout_seconds: 0.5 }
+  const evaluator = createEvaluator()
+  const run = await evaluator.prepare(config, action(test1.directory))
+  expect(await run.result).toEqual({ failure: "timeout" })
+  expect(existsSync(parentPid) && existsSync(childPid)).toBe(true)
+  expect(run.isSettled()).toBe(false)
+  expect((await evaluator.prepare(config, action(test1.directory))).admitted).toBe(false)
+  await run.settled
+  for (const file of [parentPid, childPid]) {
+    const pid = Number(readFileSync(file, "utf8"))
+    // A reparented child can briefly remain a zombie until the host reaps it.
+    const status = `/proc/${pid}/status`
+    expect(!existsSync(status) || /^State:\s+Z/m.test(readFileSync(status, "utf8"))).toBe(true)
+  }
+}, 5000)
+
+test("early checker stdin closure is a process failure, not an uncaught EPIPE or allow", async () => {
+  const code = `
+    if (process.argv.includes("--version-json")) {
+      console.log(${JSON.stringify(JSON.stringify(identity))}); process.exit(0)
+    }
+    require("node:fs").closeSync(0)
+    setTimeout(() => { console.log(JSON.stringify({ decision: "allow", reason: "fixed" })); process.exit(0) }, 100)
+  `
+  const test1 = await fixture({}, executable(code, Bun.which("node")!))
+  const run = await createEvaluator().prepare(test1.config, action(test1.directory, "x".repeat(250000)))
+  expect(await run.result).toEqual({ failure: "process" })
+  await run.settled
+})

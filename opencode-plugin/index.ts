@@ -1,4 +1,4 @@
-import { createEvaluator, type Config as EvaluatorConfig } from "./evaluator"
+import { createEvaluator, type Config as EvaluatorConfig, type Run } from "./evaluator"
 import { logInfo } from "./logger"
 
 const SHA256_PATTERN = /^[0-9a-f]{64}$/
@@ -91,10 +91,12 @@ const BashPermissionEvaluatorPlugin = {
     if (config.mode === "disabled") return
 
     const evaluator = createEvaluator()
+    let disposed = false
+    const pending = new Set<Run>()
 
     const registration = await ctx.permission.hook("evaluate", async (event) => {
       // Only pending asks are eligible; configured modes may approve them, but never override static denies.
-      if (event.action !== "shell" || event.effect !== "ask") return
+      if (disposed || event.action !== "shell" || event.effect !== "ask") return
       const command = event.metadata?.command
       const cwd = event.metadata?.cwd
       if (typeof command !== "string" || typeof cwd !== "string") return
@@ -102,6 +104,9 @@ const BashPermissionEvaluatorPlugin = {
       const evaluate = async () => {
         const started = Date.now()
         const run = await evaluator.prepare(config, { command, cwd })
+        pending.add(run)
+        void run.settled.then(() => pending.delete(run))
+        if (disposed) run.abort()
         const result = await run.result
         const decision = "decision" in result ? result.decision : undefined
         logInfo("bash permission evaluation", {
@@ -120,7 +125,7 @@ const BashPermissionEvaluatorPlugin = {
         return
       }
       const { decision, settled } = await evaluate()
-      if (!settled) return
+      if (disposed || event.effect !== "ask" || !settled) return
       if (decision === "allow") {
         event.effect = "allow"
         return
@@ -131,7 +136,12 @@ const BashPermissionEvaluatorPlugin = {
       }
     })
 
-    return () => registration.dispose()
+    return async () => {
+      disposed = true
+      for (const run of pending) run.abort()
+      await registration.dispose()
+      await Promise.allSettled([...pending].map((run) => run.settled))
+    }
   },
 }
 

@@ -28,6 +28,7 @@ if (args.length === 1 && args[0] === "--version-json") {
   process.exit(0)
 }
 const input = await Bun.stdin.text()
+if (policy.delay) await Bun.sleep(policy.delay)
 process.stdout.write(JSON.stringify({ decision: policy.decision ?? "allow", reason: "fixed" }))
 process.exit(0)
 `
@@ -162,4 +163,21 @@ test("a process failure (bad executable) leaves the human ask in place, never de
   const event: any = { action: "shell", effect: "ask", sessionID: "s", metadata: { command: "x", cwd: TMP_ROOT } }
   await fire(event)
   expect(event.effect).toBe("ask")
+})
+
+test("cleanup prevents late grants, including across asynchronous preparation", async () => {
+  for (const delayBeforeCleanup of [0, 100]) {
+    const options = await makeOptions("enforce", { delay: 500 })
+    const { ctx, fire, disposed } = fakeCtx(options)
+    const cleanup = await Plugin.setup(ctx as any)
+    const event: any = { action: "shell", effect: "ask", sessionID: "synthetic", metadata: { command: "echo hi", cwd: TMP_ROOT } }
+    const evaluation = fire(event)
+    if (delayBeforeCleanup) await Bun.sleep(delayBeforeCleanup)
+    await cleanup!()
+    await evaluation
+    expect(disposed.count).toBe(1)
+    expect(event.effect).toBe("ask")
+    await fire(event)
+    expect(event.effect).toBe("ask")
+  }
 })
