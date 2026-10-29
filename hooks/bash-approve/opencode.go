@@ -16,7 +16,7 @@ type OpenCodeInput struct {
 
 type OpenCodeOutput struct {
 	Decision string `json:"decision"`
-	Reason   string `json:"reason,omitempty"`
+	Reason   string `json:"reason"`
 	Error    string `json:"error,omitempty"`
 }
 

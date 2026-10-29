@@ -42,6 +42,12 @@ Installer requirements:
 
 Shared runtime installs to `$XDG_DATA_HOME/claude-bash-approve` when `XDG_DATA_HOME` is an absolute path, else `~/.local/share/claude-bash-approve`.
 
+### OpenCode server plugin
+
+See [`opencode-plugin/README.md`](opencode-plugin/README.md) for the optional
+server integration, configuration and important stock OpenCode 2.2.0 metadata
+limitation. The older installer below is not the server plugin.
+
 ### Production OpenCode deployment
 
 Use the Linux x86-64 archive produced by the **Linux x86-64 artefact** GitHub
